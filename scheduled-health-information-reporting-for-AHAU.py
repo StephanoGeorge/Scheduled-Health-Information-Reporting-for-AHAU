@@ -2,14 +2,17 @@ import json
 import logging
 from base64 import b64decode, b64encode
 from random import random
-from time import time, sleep
 from threading import Thread
+from time import time, sleep
 
 import requests
 import rsa
 import yaml
-from lxml.etree import HTML
 from apscheduler.schedulers.background import BlockingScheduler
+from lxml.etree import HTML
+
+region = '安徽省/合肥市/蜀山区'
+regionCode = ['340000', '340100', '340104']
 
 logging.basicConfig(format='%(asctime)s %(message)s')
 with open('config.private.yaml') as io:
@@ -33,8 +36,10 @@ def submit(account):
     session.headers.update(headers)
 
     # session.get('http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/login.zf;?rdt=web%2Fjkxxtb%2FtbJkxx')
-    publicKey = session.get('http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
-                            params={'time': int(round(time() * 1000))}).json()
+    publicKey = session.get(
+        'http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
+        params={'time': int(round(time() * 1000))}
+    ).json()
 
     def base64ToInt(string):
         return int(b64decode(string).hex(), 16)
@@ -47,8 +52,10 @@ def submit(account):
     }
 
     sleep(random() * 5)
-    loginJson = session.post('http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/checkLogin.zf',
-                             data={'dldata': b64encode(json.dumps(data).encode()).decode()}).json()
+    loginJson = session.post(
+        'http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/checkLogin.zf',
+        data={'dldata': b64encode(json.dumps(data).encode()).decode()}
+    ).json()
     if loginJson['status'] != 'SUCCESS':
         logging.warning((account['student-id'], 'login failed: ', loginJson))
         return
@@ -60,15 +67,14 @@ def submit(account):
         name = i.attrib.get('name')
         data[name] = i.attrib.get('value')
     data['tw'] = '36.{}'.format(int(random() * 8) + 1)
-    region = account['region']
-    data['dqszdmc'] = '/'.join(region[3:6])
-    data['dqszsfdm'] = region[0]
-    data['dqszsdm'] = region[1]
-    data['dqszxdm'] = region[2]
+    data['dqszdmc'] = region
+    data['dqszsfdm'] = regionCode[0]
+    data['dqszsdm'] = regionCode[1]
+    data['dqszxdm'] = regionCode[2]
     data['bz'] = ''
-    data['ydqszsfmc'] = region[3]
-    data['ydqszsmc'] = region[4]
-    data['ydqszxmc'] = region[5]
+    data['ydqszsfmc'] = ''
+    data['ydqszsmc'] = ''
+    data['ydqszxmc'] = ''
 
     sleep(random() * 10)
     submitJson = session.post('http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbBcJkxx.zf', data=data).json()
@@ -86,4 +92,6 @@ def run():
 
 scheduler = BlockingScheduler()
 scheduler.add_job(run, 'cron', hour=7)
+scheduler.add_job(run, 'cron', hour=12)
+scheduler.add_job(run, 'cron', hour=19, minute=30)
 scheduler.start()
