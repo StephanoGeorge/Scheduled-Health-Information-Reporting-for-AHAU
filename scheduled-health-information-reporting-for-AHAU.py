@@ -11,8 +11,7 @@ import yaml
 from apscheduler.schedulers.background import BlockingScheduler
 from lxml.etree import HTML
 
-region = '安徽省/合肥市/蜀山区'
-regionCode = ['340000', '340100', '340104']
+region = ['340000', '340100', '340104', '安徽省', '合肥市', '蜀山区']
 
 logging.basicConfig(format='%(asctime)s %(message)s')
 with open('config.private.yaml') as io:
@@ -67,14 +66,14 @@ def submit(account):
         name = i.attrib.get('name')
         data[name] = i.attrib.get('value')
     data['tw'] = '36.{}'.format(int(random() * 8) + 1)
-    data['dqszdmc'] = region
-    data['dqszsfdm'] = regionCode[0]
-    data['dqszsdm'] = regionCode[1]
-    data['dqszxdm'] = regionCode[2]
+    data['dqszdmc'] = '/'.join(region[3:6])
+    data['dqszsfdm'] = region[0]
+    data['dqszsdm'] = region[1]
+    data['dqszxdm'] = region[2]
     data['bz'] = ''
-    data['ydqszsfmc'] = ''
-    data['ydqszsmc'] = ''
-    data['ydqszxmc'] = ''
+    data['ydqszsfmc'] = region[3]
+    data['ydqszsmc'] = region[4]
+    data['ydqszxmc'] = region[5]
 
     sleep(random() * 10)
     submitJson = session.post('http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbBcJkxx.zf', data=data).json()
