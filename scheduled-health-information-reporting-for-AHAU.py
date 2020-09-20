@@ -35,16 +35,24 @@ headers = {
 }
 
 
+def run():
+    print()
+    for account in config['accounts']:
+        Thread(target=submit, args=(account,)).start()
+
+
 def submit(account):
     if not executeImmediately:
         sleep(random() * 60 * 30)
     session = requests.Session()
     session.headers.update(headers)
 
-    # session.get('http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/login.zf;?rdt=web%2Fjkxxtb%2FtbJkxx')
-    publicKey = session.get(
-        'http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
-        params={'time': int(round(time() * 1000))}
+    publicKey = sendRequest(
+        session,
+        requests.Request(
+            'GET', 'http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
+            params={'time': int(round(time() * 1000))},
+        ).prepare()
     ).json()
 
     def base64ToInt(string):
@@ -90,10 +98,14 @@ def submit(account):
         logging.warning((account['student-id'], 'submit failed: ', submitJson))
 
 
-def run():
-    print()
-    for account in config['accounts']:
-        Thread(target=submit, args=(account,)).start()
+def sendRequest(session, preparedRequest):
+    while True:
+        try:
+            response = session.send(preparedRequest, timeout=10)
+            return response
+        except Exception as e:
+            print(e)
+            sleep(60)
 
 
 if executeImmediately:
