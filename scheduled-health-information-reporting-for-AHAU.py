@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 from base64 import b64decode, b64encode
@@ -17,6 +18,11 @@ logging.basicConfig(format='%(asctime)s %(message)s')
 with open('config.private.yaml') as io:
     config = yaml.safe_load(io)
 
+parser = argparse.ArgumentParser()
+parser.add_argument('-i', action='store_true', help='立即执行')
+args = parser.parse_args()
+executeImmediately = args.i
+
 headers = {
     'Host': 'fresh.ahau.edu.cn',
     'Origin': 'http://fresh.ahau.edu.cn',
@@ -30,7 +36,8 @@ headers = {
 
 
 def submit(account):
-    sleep(random() * 60 * 30)
+    if not executeImmediately:
+        sleep(random() * 60 * 30)
     session = requests.Session()
     session.headers.update(headers)
 
@@ -89,8 +96,11 @@ def run():
         Thread(target=submit, args=(account,)).start()
 
 
-scheduler = BlockingScheduler()
-scheduler.add_job(run, 'cron', hour=7)
-scheduler.add_job(run, 'cron', hour=12)
-scheduler.add_job(run, 'cron', hour=19, minute=30)
-scheduler.start()
+if executeImmediately:
+    run()
+else:
+    scheduler = BlockingScheduler()
+    scheduler.add_job(run, 'cron', hour=7)
+    scheduler.add_job(run, 'cron', hour=12)
+    scheduler.add_job(run, 'cron', hour=19, minute=30)
+    scheduler.start()
