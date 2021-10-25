@@ -1,27 +1,115 @@
-import argparse
 import json
 import logging
 from base64 import b64decode, b64encode
-from random import random
+from pathlib import Path
+from random import random, randrange
 from threading import Thread
 from time import time, sleep
 
-import requests
 import rsa
 import yaml
 from apscheduler.schedulers.background import BlockingScheduler
-from lxml.etree import HTML
 
-region = ['340000', '340100', '340104', '安徽省', '合肥市', '蜀山区']
+import glb
+
+region_code = ['340000', '340100', '340104']
+region_name = ['安徽省', '合肥市', '蜀山区']
 
 logging.basicConfig(format='%(asctime)s %(message)s')
-with open('config.private.yaml') as io:
-    config = yaml.safe_load(io)
+config_path = Path('config.private.yaml')
+config = yaml.safe_load(config_path.read_text())
 
-parser = argparse.ArgumentParser()
+parser = glb.parser
 parser.add_argument('-i', action='store_true', help='立即执行')
 args = parser.parse_args()
-executeImmediately = args.i
+run_immediately = args.i
+glb.request_limits['ahau.edu.cn'] = glb.Limit(glb.SleepTime(range=[5, 30]))
+glb.request_limits['pushplus.plus'] = glb.Limit(glb.SleepTime(time=20))
+
+
+def run(wait=False):
+    threads = []
+    for account in config['accounts']:
+        thread = Thread(target=submit, args=(account,))
+        if wait:
+            threads.append(thread)
+        thread.start()
+    for t in threads:
+        t.join()
+
+
+def submit(account):
+    if not run_immediately:
+        sleep(random() * 60 * 30)
+    client = glb.Client(timeout=10)
+    client.headers.update(headers)
+
+    public_key = client.send_request(
+        'get', 'http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
+        params={'time': int(round(time() * 1000))},
+    ).json()
+    public_key = rsa.PublicKey(base64_to_int(public_key['modulus']), base64_to_int(public_key['exponent']))
+    login_data = {
+        'zhlx': b64encode(rsa.encrypt('xsxh'.encode(), public_key)).decode(),
+        'zh': b64encode(rsa.encrypt(account['student-id'].encode(), public_key)).decode(),
+        'mm': b64encode(rsa.encrypt(account['password'].encode(), public_key)).decode(),
+    }
+    login_resp = client.send_request(
+        'post', 'http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/checkLogin.zf',
+        data={'dldata': b64encode(json.dumps(login_data).encode()).decode()}
+    ).json()
+    if login_resp['status'] != 'SUCCESS':
+        logging.warning(f'login failed: {account["student-id"]} {login_resp=}')
+        notify('health information reporting: login failed', f'{account["student-id"]}')
+        return
+
+    form_html = client.send_request('get', 'http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf').tree
+    data = {}
+    for i in form_html.xpath("//*[@id='jftbForm']//input"):
+        data[i.get('name')] = i.get('value')
+    for i in form_html.xpath("//*[@id='jftbForm']//textarea"):
+        data[i.get('name')] = i.text
+    data['tw'] = '36.{}'.format(randrange(4, 8))
+    data['bz'] = ''
+    data['dqszdmc'] = ''.join(region_name)
+    data['dqszsfdm'], data['dqszsdm'], data['dqszxdm'] = region_code
+    data['ydqszsfmc'], data['ydqszsmc'], data['ydqszxmc'] = region_name
+
+    submit_resp = client.send_request(
+        'post', 'http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbBcJkxx.zf', data=data
+    ).json()
+    if submit_resp['status'] == 'success':
+        logging.warning(f'success: {account["student-id"]}')
+    else:
+        logging.warning(f'submit failed: {account["student-id"]} {submit_resp=}')
+        notify('health information reporting: submit failed', f'{account["student-id"]}')
+
+
+def notify(title, content):
+    glb.client.send_request(
+        'post', 'https://www.pushplus.plus/send', json={
+            'token': config['notification']['token'],
+            'title': title,
+            'content': content,
+            'template': 'markdown',
+        }
+    )
+
+
+def base64_to_int(string):
+    return int(b64decode(string).hex(), 16)
+
+
+def main():
+    if run_immediately:
+        run(wait=True)
+        logging.warning('immediately running finished')
+    scheduler = BlockingScheduler()
+    scheduler.add_job(run, 'cron', hour=7)
+    scheduler.add_job(run, 'cron', hour=12)
+    scheduler.add_job(run, 'cron', hour=19, minute=30)
+    scheduler.start()
+
 
 headers = {
     'Host': 'fresh.ahau.edu.cn',
@@ -34,85 +122,4 @@ headers = {
     'X-Requested-With': 'XMLHttpRequest',
 }
 
-
-def run():
-    print()
-    for account in config['accounts']:
-        Thread(target=submit, args=(account,)).start()
-
-
-def submit(account):
-    if not executeImmediately:
-        sleep(random() * 60 * 30)
-    session = requests.Session()
-    session.headers.update(headers)
-
-    publicKey = sendRequest(
-        session,
-        requests.Request(
-            'GET', 'http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
-            params={'time': int(round(time() * 1000))},
-        ).prepare()
-    ).json()
-
-    def base64ToInt(string):
-        return int(b64decode(string).hex(), 16)
-
-    publicKey = rsa.PublicKey(base64ToInt(publicKey['modulus']), base64ToInt(publicKey['exponent']))
-    data = {
-        'zhlx': b64encode(rsa.encrypt('xsxh'.encode(), publicKey)).decode(),
-        'zh': b64encode(rsa.encrypt(account['student-id'].encode(), publicKey)).decode(),
-        'mm': b64encode(rsa.encrypt(account['password'].encode(), publicKey)).decode(),
-    }
-
-    sleep(random() * 5)
-    loginJson = session.post(
-        'http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/checkLogin.zf',
-        data={'dldata': b64encode(json.dumps(data).encode()).decode()}
-    ).json()
-    if loginJson['status'] != 'SUCCESS':
-        logging.warning((account['student-id'], 'login failed: ', loginJson))
-        return
-
-    sleep(random() * 1)
-    formHtml = session.get('http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf').text
-    data = {}
-    for i in HTML(formHtml).xpath('//*[@id="jftbForm"]/input'):
-        name = i.attrib.get('name')
-        data[name] = i.attrib.get('value')
-    data['tw'] = '36.{}'.format(int(random() * 8) + 1)
-    data['dqszdmc'] = '/'.join(region[3:6])
-    data['dqszsfdm'] = region[0]
-    data['dqszsdm'] = region[1]
-    data['dqszxdm'] = region[2]
-    data['bz'] = ''
-    data['ydqszsfmc'] = region[3]
-    data['ydqszsmc'] = region[4]
-    data['ydqszxmc'] = region[5]
-
-    sleep(random() * 10)
-    submitJson = session.post('http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbBcJkxx.zf', data=data).json()
-    if submitJson['status'] == 'success':
-        logging.warning((account['student-id'], 'success'))
-    else:
-        logging.warning((account['student-id'], 'submit failed: ', submitJson))
-
-
-def sendRequest(session, preparedRequest):
-    while True:
-        try:
-            response = session.send(preparedRequest, timeout=10)
-            return response
-        except Exception as e:
-            print(e)
-            sleep(60)
-
-
-if executeImmediately:
-    run()
-else:
-    scheduler = BlockingScheduler()
-    scheduler.add_job(run, 'cron', hour=7)
-    scheduler.add_job(run, 'cron', hour=12)
-    scheduler.add_job(run, 'cron', hour=19, minute=30)
-    scheduler.start()
+main()
