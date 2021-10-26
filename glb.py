@@ -77,7 +77,6 @@ class Client(requests.Session):
         host, limit_key = headers['Host'], headers['Host']
         host_count = host.count('.')
         limit = None
-        proxy = None
         for i in range(host_count):
             if i == host_count - 1 or host in request_limits:
                 limit = request_limits[host]
@@ -118,6 +117,24 @@ class BlockAll(CookiePolicy):
     return_ok = set_ok = domain_return_ok = path_return_ok = lambda self, *args, **kwargs: False
     netscape = True
     rfc2965 = hide_cookie2 = False
+
+
+def esprima_token_match(full_list, pattern):
+    for index in range(len(full_list)):
+        if all(
+                pattern[i].value == o.value or pattern[i].value in ('"', "'") and o.value in ('"', "'")
+                for i, o in enumerate(full_list[index:index + len(pattern)])
+        ):
+            return True
+    return False
+
+
+def run_func_catch(func, *args, **kwargs):
+    try:
+        return True, func(*args, **kwargs)
+    except Exception as e:
+        logging.error(e, exc_info=True)
+        return False, e
 
 
 request_headers = {

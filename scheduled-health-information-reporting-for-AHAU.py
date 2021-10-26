@@ -1,14 +1,17 @@
-import json
 import logging
-from base64 import b64decode, b64encode
+from base64 import b64decode
 from pathlib import Path
-from random import random, randrange
+from random import random
 from threading import Thread
-from time import time, sleep
+from time import sleep
 
-import rsa
+import esprima
 import yaml
 from apscheduler.schedulers.background import BlockingScheduler
+from lxml.etree import HTML
+from selenium.webdriver.common.by import By
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.webdriver import WebDriver
 
 import glb
 
@@ -21,16 +24,74 @@ config = yaml.safe_load(config_path.read_text())
 
 parser = glb.parser
 parser.add_argument('-i', action='store_true', help='立即执行')
-args = parser.parse_args()
-run_immediately = args.i
-glb.request_limits['ahau.edu.cn'] = glb.Limit(glb.SleepTime(range=[5, 30]))
+cli_args = parser.parse_args()
+run_immediately = cli_args.i
 glb.request_limits['pushplus.plus'] = glb.Limit(glb.SleepTime(time=20))
+accept_page = True
+page_pattern = {
+    'location': esprima.tokenize('''$('.get_address').on('click', function() {
+            $('#dqszdmc').val(province + city + district);
+            $('#dqszddm').val(adcode);
+        })''')
+}
+
+
+def submit(account, check_page):
+    global accept_page
+    if not run_immediately:
+        sleep(random() * 60 * 30)
+    account_id = account['account-id']
+    password = account['password']
+
+    options = Options()
+    options.add_argument("--headless")
+    driver = WebDriver(options=options)
+
+    driver.get('http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf')
+    sleep(5)
+    driver.find_element(By.ID, 'zh').send_keys(account_id)
+    driver.find_element(By.ID, 'mm').send_keys(password)
+    driver.find_element(By.ID, 'dlan').click()
+    sleep(5)
+    driver.switch_to.alert.accept()
+    if driver.current_url != 'http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf':
+        logging.warning(f'login failed: {account["account-id"]} <<<{driver.page_source=}>>>')
+        notify('login failed', f'{account["account-id"]}')
+        driver.close()
+        return
+    sleep(5)
+
+    if check_page:
+        source_page_token = esprima.tokenize(HTML(driver.page_source).xpath('//script[not(@src)]/text()')[0])
+        if not glb.esprima_token_match(source_page_token, page_pattern['location']):
+            accept_page = False
+            logging.warning(f'page changed: location')
+            notify(f'page changed: location', 'please check page code')
+            driver.close()
+            return
+    sleep(10)
+    driver.execute_script(f'''
+        $('#dqszdmc').val('{''.join(region_name)}');
+        $('#dqszddm').val('{region_code[-1]}');
+    ''')
+    sleep(5)
+
+    if accept_page:
+        driver.find_element(By.XPATH, "//button[text()='提交']").click()
+        sleep(5)
+        if driver.find_elements(By.XPATH, "//div[text()='保存数据成功']"):
+            logging.warning(f'success: {account["account-id"]}')
+        else:
+            logging.warning(f'submit failed: {account["account-id"]} <<<{driver.page_source=}>>>')
+            notify('submit failed', f'{account["account-id"]}')
+    driver.close()
 
 
 def run(wait=False):
     threads = []
-    for account in config['accounts']:
-        thread = Thread(target=submit, args=(account,))
+    submit_catch(config['accounts'][0], True)
+    for i, account in enumerate(config['accounts'][1:]):
+        thread = Thread(target=submit_catch, args=(account, False))
         if wait:
             threads.append(thread)
         thread.start()
@@ -38,59 +99,18 @@ def run(wait=False):
         t.join()
 
 
-def submit(account):
-    if not run_immediately:
-        sleep(random() * 60 * 30)
-    client = glb.Client(timeout=10)
-    client.headers.update(headers)
-
-    public_key = client.send_request(
-        'get', 'http://fresh.ahau.edu.cn/yxxt-v5/xtgl/login/getPublicKey.zf',
-        params={'time': int(round(time() * 1000))},
-    ).json()
-    public_key = rsa.PublicKey(base64_to_int(public_key['modulus']), base64_to_int(public_key['exponent']))
-    login_data = {
-        'zhlx': b64encode(rsa.encrypt('xsxh'.encode(), public_key)).decode(),
-        'zh': b64encode(rsa.encrypt(account['student-id'].encode(), public_key)).decode(),
-        'mm': b64encode(rsa.encrypt(account['password'].encode(), public_key)).decode(),
-    }
-    login_resp = client.send_request(
-        'post', 'http://fresh.ahau.edu.cn/yxxt-v5/web/xsLogin/checkLogin.zf',
-        data={'dldata': b64encode(json.dumps(login_data).encode()).decode()}
-    ).json()
-    if login_resp['status'] != 'SUCCESS':
-        logging.warning(f'login failed: {account["student-id"]} {login_resp=}')
-        notify('health information reporting: login failed', f'{account["student-id"]}')
-        return
-
-    form_html = client.send_request('get', 'http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf').tree
-    data = {}
-    for i in form_html.xpath("//*[@id='jftbForm']//input"):
-        data[i.get('name')] = i.get('value')
-    for i in form_html.xpath("//*[@id='jftbForm']//textarea"):
-        data[i.get('name')] = i.text
-    data['tw'] = '36.{}'.format(randrange(4, 8))
-    data['bz'] = ''
-    data['dqszdmc'] = ''.join(region_name)
-    data['dqszsfdm'], data['dqszsdm'], data['dqszxdm'] = region_code
-    data['ydqszsfmc'], data['ydqszsmc'], data['ydqszxmc'] = region_name
-
-    submit_resp = client.send_request(
-        'post', 'http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbBcJkxx.zf', data=data
-    ).json()
-    if submit_resp['status'] == 'success':
-        logging.warning(f'success: {account["student-id"]}')
-    else:
-        logging.warning(f'submit failed: {account["student-id"]} {submit_resp=}')
-        notify('health information reporting: submit failed', f'{account["student-id"]}')
+def submit_catch(*args, **kwargs):
+    success, values = glb.run_func_catch(submit, *args, **kwargs)
+    if not success:
+        notify('error:', values)
 
 
 def notify(title, content):
     glb.client.send_request(
         'post', 'https://www.pushplus.plus/send', json={
             'token': config['notification']['token'],
-            'title': title,
-            'content': content,
+            'title': f'health information reporting: {title}',
+            'content': str(content),
             'template': 'markdown',
         }
     )
@@ -104,7 +124,7 @@ def main():
     if run_immediately:
         run(wait=True)
         logging.warning('immediately running finished')
-    scheduler = BlockingScheduler()
+    scheduler = BlockingScheduler(job_defaults={'misfire_grace_time': 3600, 'coalesce': True})
     scheduler.add_job(run, 'cron', hour=7)
     scheduler.add_job(run, 'cron', hour=12)
     scheduler.add_job(run, 'cron', hour=19, minute=30)
