@@ -4,7 +4,8 @@
 
 - 重命名 `config.template.yaml` 为 `config.private.yaml`
 - 按照注释配置 `config.private.yaml`
-- 运行 `main.py`, 将会在每天 7:00 ~ 7:30 之间自动填报, 体温随机在 36.1 ~ 36.9 之间
+- 运行 `main.py -h` 以查看帮助
+- 运行 `python3 main.py`, 将会在每天自动填报3次, 体温随机在 36.1 ~ 36.9 之间
 
 # 免责声明
 
