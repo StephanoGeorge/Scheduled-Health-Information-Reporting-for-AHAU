@@ -1,9 +1,11 @@
 import argparse
+import difflib
 import logging
 import random
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from http.cookiejar import CookiePolicy
 from threading import Lock, Thread
 from time import sleep
@@ -21,6 +23,25 @@ class SleepTime:
     time: float = 0
     range: list[float, float] = None
 
+    def get(self):
+        if self.range is not None:
+            return random.uniform(*self.range)
+        else:
+            return self.time
+
+
+@dataclass
+class SleepTimeRange:
+    data: dict[tuple[int, int], SleepTime]
+    default: SleepTime
+
+    def __getitem__(self, item):
+        for k, v in self.data.items():
+            s, e = k
+            if s <= item <= e:
+                return v.get()
+        return self.default.get()
+
 
 @dataclass
 class Limit:
@@ -31,10 +52,7 @@ class Limit:
 
     def trigger(self):
         def func():
-            if self.sleep_time.range is not None:
-                sleep(random.uniform(*self.sleep_time.range))
-            else:
-                sleep(self.sleep_time.time)
+            sleep(self.sleep_time.get())
             self.lock.release()
 
         self.lock.acquire()
@@ -56,7 +74,7 @@ class ResponseEnhance:
             return getattr(self.response, item)
 
 
-# 网络请求类
+# 网络请求工具类
 class Client(requests.Session):
     def __init__(self, random_ua=False, accept_cookies=True, timeout=5, **kwargs):
         # super().__init__(headers=request_headers, http2=True, timeout=6, **kwargs)
@@ -69,8 +87,9 @@ class Client(requests.Session):
         self.timeout = timeout
 
     # 发送请求
-    def send_request(self, method, url, before_func=None, check_func=None, decode=False, catch_exception=None,
-                     **kwargs):
+    def send_request(
+            self, method, url, decode=False, before_func=None, check_func=None, catch_func=None, **kwargs
+    ):
         kwargs.setdefault('timeout', self.timeout)
         headers = kwargs.setdefault('headers', {})
         headers['Host'] = re.search(r'^https?://(.+?)(/|$)', url).group(1)
@@ -108,7 +127,7 @@ class Client(requests.Session):
                     requests.exceptions.ReadTimeout, requests.exceptions.ChunkedEncodingError,
                     requests.exceptions.SSLError
                 )
-                if not catch_exception or not catch_exception(e, locals()) or type(e) not in es:
+                if not catch_func or not catch_func(e, locals()) or type(e) not in es:
                     # 进一步捕捉
                     logging.error(f'Exception: {type(e)}, {e}', exc_info=True)
 
@@ -117,6 +136,16 @@ class BlockAll(CookiePolicy):
     return_ok = set_ok = domain_return_ok = path_return_ok = lambda self, *args, **kwargs: False
     netscape = True
     rfc2965 = hide_cookie2 = False
+
+
+def monitor_diff(func, sleep_time, previous=None, *args, **kwargs):
+    previous = [] if not previous else previous
+    while True:
+        current = func(*args, **kwargs)
+        diff = tuple(difflib.unified_diff(previous, current, fromfile='previous', tofile='current', lineterm=''))
+        yield diff
+        previous = current
+        sleep(sleep_time[datetime.now().hour])
 
 
 def esprima_token_match(full_list, pattern):
@@ -129,12 +158,14 @@ def esprima_token_match(full_list, pattern):
     return False
 
 
-def run_func_catch(func, *args, **kwargs):
-    try:
-        return True, func(*args, **kwargs)
-    except Exception as e:
-        logging.error(e, exc_info=True)
-        return False, e
+def run_func_catch(func, catch_func=lambda e, k: True, *args, **kwargs):
+    while True:
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            catch = catch_func(e, locals())
+            if catch:
+                logging.error(e, exc_info=True)
 
 
 request_headers = {
