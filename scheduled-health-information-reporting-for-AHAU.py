@@ -30,6 +30,7 @@ run_immediately = cli_args.i
 web_driver = cli_args.driver
 glb.request_limits['pushplus.plus'] = glb.Limit(glb.SleepTime(20))
 script_source = Path('previous.txt').read_text().strip().splitlines()
+killed = False
 
 
 def login(driver, account_id, password):
@@ -179,28 +180,30 @@ def notify(title, content):
 
 
 def kill_exit():
+    global killed
+    if killed:
+        return
+    killed = True
     logging.warning('EXITING and KILLING Subprocesses')
-    try:
-        os.killpg(0, signal.SIGINT)
-    except KeyboardInterrupt:
-        sleep(3)
-        os.killpg(0, signal.SIGKILL)
+    os.killpg(0, signal.SIGINT)
+    sleep(3)
+    os.killpg(0, signal.SIGKILL)
 
 
 def main():
+    signal.signal(signal.SIGINT, lambda *a: kill_exit())
+    signal.signal(signal.SIGTERM, lambda *a: kill_exit())
+    Path('/tmp/Scheduled-health-information-reporting-for-AHAU.pid').write_text(str(os.getpid()))
     os.setpgrp()
-    try:
-        Thread(target=check_page).start()
-        if run_immediately:
-            run(wait=True)
-            logging.warning('immediately running finished')
-        scheduler = BlockingScheduler(job_defaults={'misfire_grace_time': 3600, 'coalesce': True})
-        scheduler.add_job(run, 'cron', hour=7)
-        scheduler.add_job(run, 'cron', hour=12)
-        scheduler.add_job(run, 'cron', hour=19, minute=30)
-        scheduler.start()
-    except KeyboardInterrupt:
-        kill_exit()
+    Thread(target=check_page).start()
+    if run_immediately:
+        run(wait=True)
+        logging.warning('immediately running finished')
+    scheduler = BlockingScheduler(job_defaults={'misfire_grace_time': 3600, 'coalesce': True})
+    scheduler.add_job(run, 'cron', hour=7)
+    scheduler.add_job(run, 'cron', hour=12)
+    scheduler.add_job(run, 'cron', hour=19, minute=30)
+    scheduler.start()
 
 
 headers = {
