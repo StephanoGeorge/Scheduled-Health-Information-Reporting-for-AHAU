@@ -88,7 +88,8 @@ class Client(requests.Session):
 
     # 发送请求
     def send_request(
-            self, method, url, decode=False, before_func=None, check_func=None, catch_func=None, **kwargs
+            self, method, url, decode=False,
+            before_func=lambda *a: None, check_func=lambda *a: False, catch_func=lambda *a: True, **kwargs
     ):
         kwargs.setdefault('timeout', self.timeout)
         headers = kwargs.setdefault('headers', {})
@@ -107,15 +108,13 @@ class Client(requests.Session):
                 if self.random_ua:
                     from . import ua  # 初始化需要解压文件
                     headers['User-Agent'] = ua.ua_rotator.get_random_user_agent()
-                if before_func:
-                    before_func(method, kwargs)
+                before_func(method, kwargs)
                 logging.debug('limit.trigger')
                 limit.trigger()
                 response: Response = getattr(self, method)(url, **kwargs)
-                if check_func:
-                    if check_func(response, locals()):
-                        # logging.warning(f"retry: {response.status_code} {url} {kwargs}")
-                        continue
+                if check_func(response, locals()):
+                    # logging.warning(f"retry: {response.status_code} {url} {kwargs}")
+                    continue
                 logging.debug(f"{response.status_code} {url} {kwargs}")
                 if decode:
                     response.encoding = chardet.detect(response.content)['encoding']
@@ -127,7 +126,7 @@ class Client(requests.Session):
                     requests.exceptions.ReadTimeout, requests.exceptions.ChunkedEncodingError,
                     requests.exceptions.SSLError
                 )
-                if not catch_func or not catch_func(e, locals()) or type(e) not in es:
+                if catch_func(e, locals()) or type(e) not in es:
                     # 进一步捕捉
                     logging.error(f'Exception: {type(e)}, {e}', exc_info=True)
 

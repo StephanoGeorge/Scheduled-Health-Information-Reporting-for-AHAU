@@ -1,11 +1,13 @@
 import difflib
 import logging
 import os
+import signal
 from pathlib import Path
 from random import random
 from threading import Thread
 from time import sleep
 
+import selenium.common
 import yaml
 from apscheduler.schedulers.background import BlockingScheduler
 from lxml.etree import HTML
@@ -34,11 +36,12 @@ def login(driver, account_id, password):
     def func():
         driver.get('http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf')
         sleep(5)
+        dismiss_alert(driver, once=True)
         driver.find_element(By.ID, 'zh').send_keys(account_id)
         driver.find_element(By.ID, 'mm').send_keys(password)
         driver.find_element(By.ID, 'dlan').click()
         sleep(5)
-        driver.switch_to.alert.accept()
+        dismiss_alert(driver)
         if driver.current_url != 'http://fresh.ahau.edu.cn/yxxt-v5/web/jkxxtb/tbJkxx.zf':
             logging.warning(f'login failed: {account_id} <<<{driver.page_source=}>>>')
             notify('login failed', f'{account_id}')
@@ -47,7 +50,11 @@ def login(driver, account_id, password):
         sleep(5)
         return True
 
-    return glb.run_func_catch(func, catch_func=catch_func)
+    def catch(e, local):
+        dismiss_alert(driver, once=True)
+        return catch_func(e, local)
+
+    return glb.run_func_catch(func, catch_func=catch)
 
 
 def submit(account):
@@ -59,6 +66,7 @@ def submit(account):
 
         driver = get_web_driver()
         if not login(driver, account_id, password):
+            driver.quit()
             return
         html = HTML(driver.page_source)
         source = get_script_source(driver, html)
@@ -67,8 +75,8 @@ def submit(account):
         ))):
             logging.warning('===\n{}'.format(diff))
             notify(f'page changed', f'```diff\n{diff}\n```')
-            driver.close()
-            os._exit(1)
+            driver.quit()
+            kill_exit()
 
         name = html.xpath("//input[@id='xm']/@value")[0]
         driver.execute_script(f'''
@@ -84,7 +92,7 @@ def submit(account):
         else:
             logging.warning(f'submit failed: {account_id} {name} <<<{driver.page_source=}>>>')
             notify('submit failed', f'{account_id} {name}')
-        driver.close()
+        driver.quit()
 
     return glb.run_func_catch(func, catch_func=catch_func)
 
@@ -117,12 +125,23 @@ def get_script_source(driver, html=None):
     return html.xpath('//script[not(@src)]/text()')[0].strip().splitlines()
 
 
+def dismiss_alert(driver, once=False):
+    while True:
+        try:
+            driver.switch_to.alert.dismiss()
+        except selenium.common.exceptions.NoAlertPresentException:
+            if once:
+                return
+        else:
+            return
+
+
 def check_page_func():
     driver = get_web_driver()
     while not login(driver, *config['accounts'][0].values()):
         sleep(60 * 10)
     source = get_script_source(driver)
-    driver.close()
+    driver.quit()
     return source
 
 
@@ -136,10 +155,14 @@ def check_page():
             diff = '\n'.join(diff)
             logging.warning('===\n{}'.format(diff))
             notify(f'page changed', f'```diff\n{diff}\n```')
-            os._exit(1)
+            kill_exit()
 
 
-def catch_func(e, k):
+def catch_func(e, local):
+    if type(e) == selenium.common.exceptions.WebDriverException:
+        if e.msg.startswith('Reached error page: about:neterror?'):
+            sleep(30)
+            return False
     notify('error', f'```\n{e}\n```')
     return True
 
@@ -155,20 +178,29 @@ def notify(title, content):
     )
 
 
-def main():
-    Thread(target=check_page).start()
-    if run_immediately:
-        run(wait=True)
-        logging.warning('immediately running finished')
-    scheduler = BlockingScheduler(job_defaults={'misfire_grace_time': 3600, 'coalesce': True})
-    scheduler.add_job(run, 'cron', hour=7)
-    scheduler.add_job(run, 'cron', hour=12)
-    scheduler.add_job(run, 'cron', hour=19, minute=30)
+def kill_exit():
+    logging.warning('EXITING and KILLING Subprocesses')
     try:
+        os.killpg(0, signal.SIGINT)
+    except KeyboardInterrupt:
+        sleep(3)
+        os.killpg(0, signal.SIGKILL)
+
+
+def main():
+    os.setpgrp()
+    try:
+        Thread(target=check_page).start()
+        if run_immediately:
+            run(wait=True)
+            logging.warning('immediately running finished')
+        scheduler = BlockingScheduler(job_defaults={'misfire_grace_time': 3600, 'coalesce': True})
+        scheduler.add_job(run, 'cron', hour=7)
+        scheduler.add_job(run, 'cron', hour=12)
+        scheduler.add_job(run, 'cron', hour=19, minute=30)
         scheduler.start()
     except KeyboardInterrupt:
-        logging.warning('EXITING')
-        os._exit(0)
+        kill_exit()
 
 
 headers = {
