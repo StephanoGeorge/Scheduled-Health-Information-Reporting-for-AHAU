@@ -1,6 +1,5 @@
-normalimport
-contextlib
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -16,14 +15,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from lxml.etree import HTML
 from playwright.async_api import async_playwright
 
-import util
-from util import async_monitor_diff, async_run_func_catch, run_main_coroutine
+from util import CLIENT, LOG_LEVEL, Limit, PARSER, REQUEST_LIMITS, SleepTime, SleepTimeRange, async_monitor_diff, \
+    async_run_func_catch, get_diff, run_main_coroutine
 
 config_dir_path = Path('config')
 config_path = config_dir_path / 'config.private.yaml'
 config = yaml.safe_load(config_path.read_text())
 
-parser = util.PARSER
+parser = PARSER
 parser.add_argument('-i', action='store_true', help='立即执行')
 cli_args = parser.parse_args()
 run_immediately = cli_args.i
@@ -76,7 +75,7 @@ async def submit(account):
                 return
             html = HTML(await page.content())
             source = await get_script_source(html=html)
-            if diff := '\n'.join(util.get_diff(script_source, source)):
+            if diff := '\n'.join(get_diff(script_source, source)):
                 logging.warning('Page changed:\n{}'.format(diff))
                 await notify(f'Page changed', f'```diff\n{diff}\n```')
                 create_task(shutdown())
@@ -114,8 +113,8 @@ async def check_page():
             return source
 
     await sleep(60 * 10)
-    sleep_time = util.SleepTimeRange(
-        {(0, 6): util.SleepTime(60 * 60 * 6), (22, 24): util.SleepTime(60 * 60 * 8)}, util.SleepTime(60 * 10)
+    sleep_time = SleepTimeRange(
+        {(0, 6): SleepTime(60 * 60 * 6), (22, 24): SleepTime(60 * 60 * 8)}, SleepTime(60 * 10)
     )
     async for diff in async_monitor_diff(func, sleep_time, script_source):
         if diff:
@@ -145,8 +144,8 @@ async def catch_func(e, local):
 
 
 async def notify(title, content):
-    if util.LOG_LEVEL > logging.DEBUG:
-        await util.CLIENT.send_request(
+    if getattr(logging, LOG_LEVEL) > logging.DEBUG:
+        await CLIENT.send_request(
             'post', 'https://www.pushplus.plus/send', json={
                 'token': config['notification']['token'],
                 'title': f'Health Information Reporting: {title}',
@@ -183,7 +182,7 @@ async def run(return_cancelled_error=False):
 async def main():
     global browser
     logging.basicConfig(format='%(asctime)s %(message)s')
-    util.REQUEST_LIMITS['pushplus.plus'] = util.Limit(util.SleepTime(20))
+    REQUEST_LIMITS['pushplus.plus'] = Limit(SleepTime(20))
 
     async with contextlib.AsyncExitStack() as stack:
         play = await stack.enter_async_context(async_playwright())

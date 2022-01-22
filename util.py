@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.cookiejar import CookiePolicy
-from typing import Union
+from typing import Optional
 
 import coloredlogs
 import httpx
@@ -221,7 +221,7 @@ REQUEST_HEADERS = {
     'Pragma': 'no-cache',
     'Cache-Control': 'no-cache',
 }
-CLIENT: Union[Client, None] = None
+CLIENT: Optional[Client] = None
 
 
 def run_main_coroutine(main):
@@ -240,8 +240,9 @@ def run_main_coroutine(main):
 
 PARSER = argparse.ArgumentParser()
 PARSER.add_argument('-l', default='info', help='log level')
-_arguments = PARSER.parse_known_args()[0]
-LOG_LEVEL = logging.getLevelName(_arguments.l.upper())
+_cli_args = PARSER.parse_known_args()[0]
+LOG_LEVEL = _cli_args.l
+LOGGER = logging.getLogger('main')
 # 启用彩色日志
-coloredlogs.install(fmt='%(asctime)s %(levelname)s %(message)s', level=LOG_LEVEL)
+coloredlogs.install(level=LOG_LEVEL.upper(), fmt='%(asctime)s %(levelname)s %(message)s', logger=LOGGER)
 REQUEST_LIMITS = defaultdict(Limit)
