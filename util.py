@@ -10,7 +10,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.cookiejar import CookiePolicy
-from typing import Optional
 
 import coloredlogs
 import httpx
@@ -104,24 +103,21 @@ class Client(httpx.AsyncClient):
         while True:
             try:
                 before_func(method, kwargs)
-                logging.debug('limit.trigger')
+                LOGGER.debug('limit.trigger')
                 await limit.trigger()
                 response: httpx.Response = await getattr(self, method)(url, **kwargs)
                 if check_func(response, locals()):
-                    # logging.warning(f"retry: {response.status_code} {url} {kwargs}")
+                    # LOGGER.warning(f"retry: {response.status_code} {url} {kwargs}")
                     continue
-                logging.debug(f"{response.status_code} {url} {kwargs}")
+                LOGGER.debug(f"{response.status_code} {url} {kwargs}")
                 return ResponseEnhance(response)
             except Exception as e:
                 es = (
                     httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadTimeout,
-                    # requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError,
-                    # requests.exceptions.ReadTimeout, requests.exceptions.ChunkedEncodingError,
-                    # requests.exceptions.SSLError
                 )
                 if catch_func(e, locals()) or type(e) not in es:
                     # 进一步捕捉
-                    logging.exception(f'Exception: {type(e)}, {e}')
+                    LOGGER.exception(f'Exception: {type(e)}, {e}')
 
 
 class BlockAll(CookiePolicy):
@@ -169,7 +165,7 @@ async def async_monitor_diff(func, sleep_time, previous=None):
     while True:
         current = await func()
         diff = get_diff(previous, current)
-        yield diff
+        yield diff, current
         previous = current
         await sleep(sleep_time[datetime.now().hour])
 
@@ -186,9 +182,9 @@ def run_func_catch(func, catch_func=None):
         try:
             return func()
         except Exception as e:
-            retry, catch = catch_func(e, locals())
-            if catch:
-                logging.exception(e)
+            retry, caught = catch_func(e, locals())
+            if not caught:
+                LOGGER.exception(e)
             if not retry:
                 return e
 
@@ -201,9 +197,9 @@ async def async_run_func_catch(func, catch_func=None):
         try:
             return await func()
         except Exception as e:
-            retry, catch = await catch_func(e, locals())
-            if catch:
-                logging.exception(e)
+            retry, caught = await catch_func(e, locals())
+            if not caught:
+                LOGGER.exception(e)
             if not retry:
                 return e
 
@@ -221,27 +217,24 @@ REQUEST_HEADERS = {
     'Pragma': 'no-cache',
     'Cache-Control': 'no-cache',
 }
-CLIENT: Optional[Client] = None
+CLIENT = Client()
 
 
 def run_main_coroutine(main):
     async def func():
-        global CLIENT
-        CLIENT = Client()
-        result = await main
-        await CLIENT.aclose()
-        return result
+        try:
+            result = await main
+            return result
+        finally:
+            await CLIENT.aclose()
 
-    # 关闭不重要的日志
-    logging.getLogger('urllib3').setLevel(logging.FATAL)
-    logging.getLogger('hpack').setLevel(logging.INFO)
     return asyncio.run(func())
 
 
 PARSER = argparse.ArgumentParser()
 PARSER.add_argument('-l', default='info', help='log level')
-_cli_args = PARSER.parse_known_args()[0]
-LOG_LEVEL = _cli_args.l
+CLI_ARGS = PARSER.parse_known_args()[0]
+LOG_LEVEL = CLI_ARGS.l
 LOGGER = logging.getLogger('main')
 # 启用彩色日志
 coloredlogs.install(level=LOG_LEVEL.upper(), fmt='%(asctime)s %(levelname)s %(message)s', logger=LOGGER)
